@@ -48,6 +48,10 @@ from .utils.error_handlers import (handle_partition_responses, raise_error,
 
 log = logging.getLogger(__name__)
 
+# From the Kafka protocol docs:
+# For simple consumers memberId must be empty and generation_id must be -1
+SIMPLE_CONSUMER_CONSUMER_ID = b''
+SIMPLE_GENERATION_ID = -1
 
 class SimpleConsumer(object):
     """
@@ -71,9 +75,7 @@ class SimpleConsumer(object):
                  consumer_timeout_ms=-1,
                  auto_start=True,
                  reset_offset_on_start=False,
-                 compacted_topic=False,
-                 generation_id=-1,
-                 consumer_id=b''):
+                 compacted_topic=False):
         """Create a SimpleConsumer.
 
         Settings and default values are taken from the Scala
@@ -142,11 +144,6 @@ class SimpleConsumer(object):
             consumer to use less stringent message ordering logic because compacted
             topics do not provide offsets in stict incrementing order.
         :type compacted_topic: bool
-        :param generation_id: The generation id with which to make group requests
-        :type generation_id: int
-        :param consumer_id: The identifying string to use for this consumer on group
-            requests
-        :type consumer_id: bytes
         """
         self._running = False
         self._cluster = cluster
@@ -172,9 +169,6 @@ class SimpleConsumer(object):
         self._auto_start = auto_start
         self._reset_offset_on_start = reset_offset_on_start
         self._is_compacted_topic = compacted_topic
-        self._generation_id = valid_int(generation_id, allow_zero=True,
-                                        allow_negative=True)
-        self._consumer_id = consumer_id
 
         # incremented for any message arrival from any partition
         # the initial value is 0 (no messages waiting)
@@ -194,7 +188,7 @@ class SimpleConsumer(object):
                                                   self._cluster.handler,
                                                   self._messages_arrived,
                                                   self._is_compacted_topic,
-                                                  self._consumer_id)
+                                                  SIMPLE_CONSUMER_CONSUMER_ID)
                                 for p in partitions}
         else:
             self._partitions = {topic.partitions[k]:
@@ -202,7 +196,7 @@ class SimpleConsumer(object):
                                                self._cluster.handler,
                                                self._messages_arrived,
                                                self._is_compacted_topic,
-                                               self._consumer_id)
+                                               SIMPLE_CONSUMER_CONSUMER_ID)
                                 for k, p in iteritems(topic.partitions)}
         self._partitions_by_id = {p.partition.id: p
                                   for p in itervalues(self._partitions)}
@@ -479,11 +473,10 @@ class SimpleConsumer(object):
 
             try:
                 response = self._group_coordinator.commit_consumer_group_offsets(
-                    self._consumer_group, self._generation_id, self._consumer_id, reqs)
+                    self._consumer_group, SIMPLE_GENERATION_ID, SIMPLE_CONSUMER_CONSUMER_ID, reqs)
             except (SocketDisconnectedError, IOError):
-                log.error("Error committing offsets for topic '%s' from consumer id '%s'"
-                          "(SocketDisconnectedError)",
-                          self._topic.name, self._consumer_id)
+                log.error("Error committing offsets for topic '%s'(SocketDisconnectedError)",
+                          self._topic.name)
                 if i >= self._offsets_commit_max_retries - 1:
                     raise
                 self._update()
@@ -496,8 +489,8 @@ class SimpleConsumer(object):
             if (len(parts_by_error) == 1 and 0 in parts_by_error) or \
                     len(parts_by_error) == 0:
                 break
-            log.error("Error committing offsets for topic '%s' from consumer id '%s'"
-                      "(errors: %s)", self._topic.name, self._consumer_id,
+            log.error("Error committing offsets for topic '%s'"
+                      "(errors: %s)", self._topic.name,
                       {ERROR_CODES[err]: [op.partition.id for op, _ in parts]
                        for err, parts in iteritems(parts_by_error)})
 
